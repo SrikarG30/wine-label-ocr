@@ -3,7 +3,8 @@ import numpy as np
 from paddleocr import PaddleOCR
 
 # Initialize a global OCR instance
-ocr = PaddleOCR(lang='en', use_angle_cls=True, show_log=False)
+ocr = PaddleOCR(lang='en', use_angle_cls=True)
+
 
 def _pad_box(xyxy, img_w, img_h, pad=0.05):
     x1, y1, x2, y2 = xyxy
@@ -14,6 +15,7 @@ def _pad_box(xyxy, img_w, img_h, pad=0.05):
     x2 = min(img_w, int(x2 + pad * w))
     y2 = min(img_h, int(y2 + pad * h))
     return [x1, y1, x2, y2]
+
 
 def _enhance_for_ocr(crop_bgr):
     # Convert to grayscale and apply CLAHE
@@ -35,23 +37,61 @@ def _enhance_for_ocr(crop_bgr):
                                   cv2.THRESH_BINARY, 31, 7)
     return sharp, binar
 
+
 def _run_paddle_ocr(img):
-    # If grayscale, convert to RGB
+    # Ensure RGB ndarray
+    if img is None or img.size == 0:
+        return [], []
     if len(img.shape) == 2:
         rgb = cv2.cvtColor(img, cv2.COLOR_GRAY2RGB)
     else:
         rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    result = ocr.ocr(rgb, cls=True)
-    texts = []
-    confs = []
-    if result:
-        for line in result[0]:
-            txt = line[1][0].strip()
-            conf = float(line[1][1])
-            if txt:
-                texts.append(txt)
-                confs.append(conf)
+
+    result = ocr.ocr(rgb)  # angle cls handled by use_angle_cls=True
+
+    # Handle None / empty early
+    if result is None or (isinstance(result, (list, tuple)) and len(result) == 0):
+        return [], []
+
+    # Many PaddleOCR versions wrap results as [ list_of_lines ]
+    lines = result[0] if (isinstance(result, (list, tuple)) and len(
+        result) > 0 and isinstance(result[0], (list, tuple, dict))) else result
+
+    texts, confs = [], []
+
+    for line in lines or []:
+        txt, score = None, None
+
+        # Dict style (some pipelines)
+        if isinstance(line, dict):
+            txt = line.get('rec_text') or line.get('label') or line.get('text')
+            score = line.get('rec_score') or line.get('score')
+
+        # List/Tuple styles:
+        elif isinstance(line, (list, tuple)):
+            # Old style: [box, (text, score)]
+            if len(line) >= 2 and isinstance(line[1], (list, tuple)) and len(line[1]) >= 2:
+                txt = line[1][0]
+                score = line[1][1]
+            # Common style: [box, text, score]
+            elif len(line) >= 3 and isinstance(line[1], str):
+                txt = line[1]
+                score = line[2]
+            # Sometimes: (text, score)
+            elif len(line) >= 2 and isinstance(line[0], str):
+                txt = line[0]
+                score = line[1]
+
+        if txt:
+            try:
+                conf = float(score) if score is not None else 0.0
+            except Exception:
+                conf = 0.0
+            texts.append(txt.strip())
+            confs.append(conf)
+
     return texts, confs
+
 
 def best_ocr_text(crop_bgr):
     sharp, binar = _enhance_for_ocr(crop_bgr)
@@ -64,6 +104,7 @@ def best_ocr_text(crop_bgr):
     else:
         texts, confs = t2, c2
     return " ".join(texts).strip(), (np.mean(confs) if confs else 0.0)
+
 
 def extract_fields(image_bgr, detections):
     """
@@ -80,11 +121,13 @@ def extract_fields(image_bgr, detections):
         # Process by class
         cls_lower = cls.replace("-", "_").lower()
         if cls_lower in ["maker_name", "maker_name", "producer", "winery"]:
-            cleaned = "".join(ch for ch in txt if ch.isalnum() or ch in " &'-").upper()
+            cleaned = "".join(ch for ch in txt if ch.isalnum()
+                              or ch in " &'-").upper()
             cleaned = " ".join(cleaned.split())
             if not out["maker_name"] or (cleaned and len(cleaned) > len(out["maker_name"])):
                 out["maker_name"] = cleaned if cleaned else None
-            out["raw"].setdefault("maker_name_candidates", []).append((cleaned, conf))
+            out["raw"].setdefault("maker_name_candidates",
+                                  []).append((cleaned, conf))
         elif cls_lower in ["vintage", "year"]:
             import re
             m = re.search(r"\b(19|20)\d{2}\b", txt)
