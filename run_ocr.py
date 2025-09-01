@@ -4,12 +4,10 @@ import json
 import sys
 from ocr_wine import extract_fields
 
-def main(image_path, weights_path):
+def run_once(image_path, weights_path):
     model = YOLO(weights_path)
     img = cv2.imread(image_path)
-    # Run inference
     pred = model(img, verbose=False)[0]
-    # Map class IDs to names; adjust according to your model
     id_to_name = {0: "Distinct Logo", 1: "Maker-Name", 2: "Vintage"}
     detections = []
     for b in pred.boxes:
@@ -19,7 +17,10 @@ def main(image_path, weights_path):
             "class": id_to_name.get(cls_id, str(cls_id)),
             "box": [x1, y1, x2, y2]
         })
-    result = extract_fields(img, detections)
+    return extract_fields(img, detections)
+
+def main(image_path, weights_path):
+    result = run_once(image_path, weights_path)
     print(json.dumps(result, indent=2))
 
 if __name__ == "__main__":
