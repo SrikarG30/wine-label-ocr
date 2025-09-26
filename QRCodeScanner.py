@@ -24,7 +24,7 @@ def ask_yes_no(prompt: str) -> bool:
 def scanBarcode(cam_index=0):
     has_barcode = ask_yes_no("Does the wine bottle have a barcode? (y/n): ")
     if not has_barcode:
-        return 0
+        return None
 
     cap = cv2.VideoCapture(cam_index, cv2.CAP_AVFOUNDATION)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)

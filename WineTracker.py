@@ -1,6 +1,6 @@
 # functions
 from QRCodeScanner import scanBarcode
-from extract_maker_vintage import wine_fields
+from final_run_ocr import final_run_ocr
 
 # imports
 import json
@@ -14,25 +14,24 @@ record = {
     'MakerName': None,      # string
     'Vintage': None,        # integer (4 digits)
     'Barcode': None,        # 
-    'BlobData': None        # json (coordinates)
+    'BlobData': {}        # json (coordinates)
 }
 
 
 # Run QRCodeScanner
 barcode = scanBarcode(0)
-if barcode != 0:
-    record['Barcode'] = barcode
+if barcode:
+    record['Barcode'] = str(barcode)
 
-custom_id, maker_name, vintage = wine_fields('workflowTest.jpeg', 'weights.pt')
+custom_id, maker, vintage = final_run_ocr("workflowTest.jpeg", "weights.pt")
 
-if custom_id:
-    record['CustomID'] = custom_id
-    record['MakerName'] = maker_name
-    record['Vintage'] = vintage
-elif maker_name:
-    record['MakerName'] = maker_name
-elif vintage:
-    record['Vintage'] = vintage
+# Set fields if present
+if custom_id is not None:
+    record["CustomID"] = custom_id
+if maker:
+    record["MakerName"] = maker
+if vintage is not None:
+    record["Vintage"] = vintage
 
 print(record)
 
