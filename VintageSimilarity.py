@@ -15,3 +15,23 @@ def isVintageSimilar(r1: dict, r2: dict) -> bool:
     if not v1 or not v2: # If either record doesn't have a Vintage
         return False
     return v1 == v2 # check if Vtinages are identical
+
+
+# TESTING:
+# record_a = {
+#     "CustomID": "OpusOne|2018",
+#     "MakerName": "Opus One",
+#     "Vintage": 2018,
+#     "Barcode": "123456789012",   # EAN-13 (leading 0)
+#     "BlobData": {}
+# }
+
+# record_b = {
+#     "CustomID": "OpusOne|2018",
+#     "MakerName": "Opus One",
+#     "Vintage": 2018,
+#     "Barcode": "123456789012",    # UPC-A (12 digits), same code family
+#     "BlobData": {}
+# }
+
+# print(isVintageSimilar(record_a, record_b))
