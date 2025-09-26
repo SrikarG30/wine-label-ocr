@@ -2,12 +2,45 @@
 # One-call OCR: (image) -> (CustomID, MakerName, Vintage)
 # - Caches YOLO and PaddleOCR once to avoid reloading GBs of weights
 # - Accepts an image path or a cv2/numpy image
+# - Suppresses PaddleOCR debug logs/prints
+
 from pathlib import Path
 from typing import Optional, Union, Tuple, Dict, Any, List
 import re
 import cv2
 import numpy as np
 from ultralytics import YOLO
+
+# --- logging silence helpers for PaddleOCR ---
+import logging, contextlib, sys, io, inspect
+
+@contextlib.contextmanager
+def _silence_ppocr_and_stdout(level=logging.ERROR):
+    """
+    Mute PaddleOCR logs and any print()s it does inside the block.
+    """
+    targets = [
+        "ppocr", "ppocr.utils", "ppocr.data",
+        "ppocr.postprocess", "ppocr.infer"
+    ]
+    saved = []
+    for name in targets:
+        lg = logging.getLogger(name)
+        saved.append((lg, lg.level, lg.propagate, list(lg.handlers)))
+        lg.setLevel(level)
+        lg.propagate = False
+        lg.handlers = [logging.NullHandler()]
+    old_out, old_err = sys.stdout, sys.stderr
+    buf_out, buf_err = io.StringIO(), io.StringIO()
+    try:
+        sys.stdout, sys.stderr = buf_out, buf_err
+        yield
+    finally:
+        sys.stdout, sys.stderr = old_out, old_err
+        for lg, lvl, prop, handlers in saved:
+            lg.setLevel(lvl)
+            lg.propagate = prop
+            lg.handlers = handlers
 
 # ---------- Lazy singletons to prevent memory spikes ----------
 _YOLO = None
@@ -33,24 +66,28 @@ def _get_ocr():
     """Create PaddleOCR once and reuse. Compatible with builds that don't support show_log."""
     global _OCR
     if _OCR is None:
-        from paddleocr import PaddleOCR
-        import inspect
+        if PaddleOCR is None:
+            # Defensive: re-import if the first import failed for transient reasons
+            from paddleocr import PaddleOCR as _POCR  # type: ignore
+        else:
+            _POCR = PaddleOCR  # type: ignore
+
         kwargs = dict(lang='en', use_angle_cls=True)
         try:
-            # pass show_log=False only if supported by this PaddleOCR
-            if 'show_log' in inspect.signature(PaddleOCR.__init__).parameters:
+            if 'show_log' in inspect.signature(_POCR.__init__).parameters:  # type: ignore
                 kwargs['show_log'] = False
         except Exception:
             pass
-        try:
-            _OCR = PaddleOCR(**kwargs)
-        except TypeError:
-            # very old builds: fall back to minimal ctor
-            _OCR = PaddleOCR()
+
+        # Silence logs/prints during construction
+        with _silence_ppocr_and_stdout():
+            try:
+                _OCR = _POCR(**kwargs)  # type: ignore
+            except TypeError:
+                _OCR = _POCR()  # very old builds
     return _OCR
 
-
-# ---------- OCR helpers (adapted from your ocr_wine.py) ----------
+# ---------- OCR helpers ----------
 def _pad_box(xyxy, img_w, img_h, pad=0.08):
     x1, y1, x2, y2 = xyxy
     w, h = x2 - x1, y2 - y1
@@ -81,7 +118,10 @@ def _run_paddle_ocr(img_bgr) -> Tuple[List[str], List[float]]:
     else:
         rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
 
-    result = _get_ocr().ocr(rgb)
+    # Silence logs/prints during inference
+    with _silence_ppocr_and_stdout():
+        result = _get_ocr().ocr(rgb)
+
     if not result:
         return [], []
 
@@ -111,8 +151,8 @@ def _best_ocr_text(crop_bgr):
     sharp, binar = _enhance_for_ocr(crop_bgr)
     t1, c1 = _run_paddle_ocr(sharp)
     t2, c2 = _run_paddle_ocr(binar)
-    m1 = np.mean(c1) if c1 else 0.0
-    m2 = np.mean(c2) if c2 else 0.0
+    m1 = float(np.mean(c1)) if c1 else 0.0
+    m2 = float(np.mean(c2)) if c2 else 0.0
     texts, confs = (t1, c1) if m1 >= m2 else (t2, c2)
     return " ".join(texts).strip(), (float(np.mean(confs)) if confs else 0.0)
 
@@ -235,12 +275,3 @@ def final_run_ocr(
     vintage_int = _to_int_year(fields.get("vintage"))
     custom_id = f"{maker_out}|{vintage_int}" if (maker_out and vintage_int) else None
     return custom_id, maker_out, vintage_int
-
-# ---------- CLI ----------
-if __name__ == "__main__":
-    import sys, json
-    if len(sys.argv) != 3:
-        # print("Usage: python final_run_ocr.py <image_path> <weights_path>")
-        sys.exit(1)
-    c, m, v = final_run_ocr(sys.argv[1], sys.argv[2])
-    # print(json.dumps({"CustomID": c, "MakerName": m, "Vintage": v}, indent=2))

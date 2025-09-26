@@ -1,6 +1,11 @@
-# functions
-from QRCodeScanner import scanBarcode
-from final_run_ocr import final_run_ocr
+# data extraction functions
+from data_extraction_functions.QRCodeScanner import scanBarcode
+from data_extraction_functions.final_run_ocr import final_run_ocr
+
+# similarity functions
+from similarity_functions.QRCodeSimilarity import isBarcodeSimilar
+from similarity_functions.VintageSimilarity import isVintageSimilar
+
 
 # imports
 import json
@@ -20,12 +25,12 @@ record = {
 
 # --------- RUN QR CODE SCANNER ---------
 # comment out these three lines if pyzbar not working to test other code
-barcode = scanBarcode(0)
-if barcode:
-    record['Barcode'] = str(barcode)
+# barcode = scanBarcode(0)
+# if barcode:
+#     record['Barcode'] = str(barcode)
 
 # uncomment line below if pyzbar not working to test other code
-# record['Barcode'] = 'temp' 
+record['Barcode'] = 'temp' 
 
 
 
