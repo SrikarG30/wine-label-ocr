@@ -5,6 +5,8 @@ from data_extraction_functions.final_run_ocr import final_run_ocr
 # similarity functions
 from similarity_functions.QRCodeSimilarity import isBarcodeSimilar
 from similarity_functions.VintageSimilarity import isVintageSimilar
+from similarity_functions.MakerAndCustomIDSimilarity import isCustomIDSimilar
+from similarity_functions.MakerAndCustomIDSimilarity import isMakerNameSimilar
 
 
 # imports

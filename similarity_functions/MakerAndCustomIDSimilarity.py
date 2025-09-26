@@ -83,26 +83,26 @@ def isCustomIDSimilar(r1: dict, r2: dict, *, threshold: int = 85) -> bool:
 
 
 
-# Case 1: accents + spacing differences
-r1a = {"MakerName": "Château Margaux", "CustomID": "Château  Margaux|2019"}
-r1b = {"MakerName": "Chateau   Margaux", "CustomID": "Chateau Margaux | 2019"}
+# # Case 1: accents + spacing differences
+# r1a = {"MakerName": "Château Margaux", "CustomID": "Château  Margaux|2019"}
+# r1b = {"MakerName": "Chateau   Margaux", "CustomID": "Chateau Margaux | 2019"}
 
-# Case 2: extra word present (subset tokens)
-r2a = {"MakerName": "Robert Mondavi Winery", "CustomID": "Robert Mondavi Winery|2019"}
-r2b = {"MakerName": "Robert Mondavi",        "CustomID": "Robert Mondavi|2019"}
+# # Case 2: extra word present (subset tokens)
+# r2a = {"MakerName": "Robert Mondavi Winery", "CustomID": "Robert Mondavi Winery|2019"}
+# r2b = {"MakerName": "Robert Mondavi",        "CustomID": "Robert Mondavi|2019"}
 
-# Case 3: punctuation/case differences
-r3a = {"MakerName": "Opus One", "CustomID": "Opus One|2019"}
-r3b = {"MakerName": "OPU-ON", "CustomID": "OPUS-ONE|2019"}
+# # Case 3: punctuation/case differences
+# r3a = {"MakerName": "Opus One", "CustomID": "Opus One|2019"}
+# r3b = {"MakerName": "OPU-ON", "CustomID": "OPUS-ONE|2019"}
 
-print(isMakerNameSimilar(r1a, r1b))   # True
-print(isCustomIDSimilar(r1a, r1b))    # True
+# print(isMakerNameSimilar(r1a, r1b))   # True
+# print(isCustomIDSimilar(r1a, r1b))    # True
 
-print(isMakerNameSimilar(r2a, r2b))   # True
-print(isCustomIDSimilar(r2a, r2b))    # True
+# print(isMakerNameSimilar(r2a, r2b))   # True
+# print(isCustomIDSimilar(r2a, r2b))    # True
 
-print(isMakerNameSimilar(r3a, r3b))   # True
-print(isCustomIDSimilar(r3a, r3b))    # True
+# print(isMakerNameSimilar(r3a, r3b))   # True
+# print(isCustomIDSimilar(r3a, r3b))    # True
 
 
 # # Case A
