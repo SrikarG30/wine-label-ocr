@@ -240,7 +240,7 @@ def final_run_ocr(
 if __name__ == "__main__":
     import sys, json
     if len(sys.argv) != 3:
-        print("Usage: python final_run_ocr.py <image_path> <weights_path>")
+        # print("Usage: python final_run_ocr.py <image_path> <weights_path>")
         sys.exit(1)
     c, m, v = final_run_ocr(sys.argv[1], sys.argv[2])
-    print(json.dumps({"CustomID": c, "MakerName": m, "Vintage": v}, indent=2))
+    # print(json.dumps({"CustomID": c, "MakerName": m, "Vintage": v}, indent=2))
