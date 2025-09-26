@@ -60,7 +60,3 @@ def scanBarcode(cam_index=0):
     finally:
         cap.release()
         cv2.destroyAllWindows()
-
-    
-
-print(scanBarcode(0))
