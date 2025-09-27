@@ -1,7 +1,7 @@
 # data extraction functions
 from data_extraction_functions.QRCodeScanner import scanBarcode
 from data_extraction_functions.final_run_ocr import final_run_ocr
-
+#from data_extraction_functions.real_final_run_ocr import final_run_ocr
 # similarity functions
 from similarity_functions.QRCodeSimilarity import isBarcodeSimilar
 from similarity_functions.VintageSimilarity import isVintageSimilar
@@ -28,12 +28,12 @@ record = {
 
 # --------- RUN QR CODE SCANNER ---------
 # comment out these three lines if pyzbar not working to test other code
-# barcode = scanBarcode(0)
-# if barcode:
-#     record['Barcode'] = str(barcode)
+barcode = scanBarcode(0)
+if barcode:
+    record['Barcode'] = str(barcode)
 
 # uncomment line below if pyzbar not working to test other code
-record['Barcode'] = 'temp' 
+#record['Barcode'] = 'temp' 
 
 
 
@@ -50,7 +50,11 @@ record['Barcode'] = 'temp'
 # --------- TESTING THE IMAGE STITCH -----------
 path = stitchedImagePath()
 if path:
-    custom_id, maker, vintage = final_run_ocr(path, "weights.pt")
+    custom_id, maker, vintage = final_run_ocr('IMG_1325.jpeg', "weights.pt")
+
+# print(custom_id)
+# print(maker)
+# print(vintage)
 
 if custom_id is not None:
     record["CustomID"] = custom_id
@@ -62,15 +66,15 @@ if vintage is not None:
 
 
 # --------- RUN PADDLEOCR/ROBOFLOW ---------
-custom_id, maker, vintage = final_run_ocr("test_images/009.jpg", "weights.pt")
+# custom_id, maker, vintage = final_run_ocr("test_images/009.jpg", "weights.pt")
 
-# Set fields if present
-if custom_id is not None:
-    record["CustomID"] = custom_id
-if maker:
-    record["MakerName"] = maker
-if vintage is not None:
-    record["Vintage"] = vintage
+# # Set fields if present
+# if custom_id is not None:
+#     record["CustomID"] = custom_id
+# if maker:
+#     record["MakerName"] = maker
+# if vintage is not None:
+#     record["Vintage"] = vintage
 
 
 
@@ -82,4 +86,3 @@ if vintage is not None:
 
 # Output record for testing
 print(record)
-

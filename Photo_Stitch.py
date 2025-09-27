@@ -1,12 +1,19 @@
 # Photo_Stitch.py
+# Capture FRONT + BACK label crops using YOLO bottle detection,
+# stitch them side-by-side, save to a temp JPG, and return the file path.
+#
+# Usage from another module:
+#   from Photo_Stitch import stitchedImagePath
+#   path = stitchedImagePath()
+#   if path:
+#       final_run_ocr(path, "weights.pt")
 
+from pathlib import Path
+from typing import Union, Optional, Tuple
+import uuid
+import tempfile
 import cv2
 import numpy as np
-import time
-import sys
-import tempfile
-import uuid
-from pathlib import Path
 
 try:
     from ultralytics import YOLO
@@ -15,17 +22,18 @@ except Exception as e:
         f"Install ultralytics first: pip install ultralytics\n\n{e}"
     )
 
-# ---------- config ----------
+# ---------- Config ----------
 CAM_INDEX = 0
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
-BOTTLE_CLASS_ID = 39          # COCO "bottle"
+BOTTLE_CLASS_ID = 39           # COCO "bottle"
 YOLO_CONF = 0.40
 GUIDE_BOX_FRAC = (0.40, 0.80)  # (width_frac, height_frac)
+YOLO_WEIGHTS_FOR_DETECTION = "yolov8n.pt"  # change if you want
 
 
-def draw_guide_box(img, frac=(0.4, 0.8)):
-    # --- Giant Box -----
+def draw_guide_box(img, frac=(0.4, 0.8)) -> Tuple[int, int, int, int]:
+    """Draws a centered translucent guide box + crosshairs. Returns (x1,y1,x2,y2)."""
     h, w = img.shape[:2]
     gw = int(w * frac[0])
     gh = int(h * frac[1])
@@ -33,14 +41,17 @@ def draw_guide_box(img, frac=(0.4, 0.8)):
     y1 = (h - gh) // 2
     x2 = x1 + gw
     y2 = y1 + gh
-    # ---- box -----
+
+    # box
     cv2.rectangle(img, (x1, y1), (x2, y2), (60, 220, 60), 2)
 
+    # dim surroundings
     overlay = img.copy()
     cv2.rectangle(overlay, (0, 0), (w, h), (0, 0, 0), -1)
     cv2.rectangle(overlay, (x1, y1), (x2, y2), (0, 0, 0), -1)
     img[:] = cv2.addWeighted(overlay, 0.15, img, 0.85, 0)
-    # ----- crosshair lines -----
+
+    # crosshair
     cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
     cv2.line(img, (cx, y1), (cx, y2), (60, 220, 60), 1)
     cv2.line(img, (x1, cy), (x2, cy), (60, 220, 60), 1)
@@ -48,6 +59,7 @@ def draw_guide_box(img, frac=(0.4, 0.8)):
 
 
 def choose_bottle_box(results):
+    """Pick the largest confident bottle bbox from YOLO results."""
     best = None
     best_area = 0
     for r in results:
@@ -72,6 +84,7 @@ def choose_bottle_box(results):
 
 
 def safe_crop(img, x1, y1, x2, y2):
+    """Safely crop; return None on invalid region."""
     H, W = img.shape[:2]
     x1 = max(0, min(int(x1), W - 1))
     x2 = max(0, min(int(x2), W))
@@ -84,18 +97,16 @@ def safe_crop(img, x1, y1, x2, y2):
 
 
 def stitch_horizontal(img1, img2):
-    # ----- Return side-by-side stitch with matched heights (no saving).----
+    """Return side-by-side stitch with matched heights."""
     h1, w1 = img1.shape[:2]
     h2, w2 = img2.shape[:2]
     if h1 != h2:
         scale = h1 / float(h2)
-        img2 = cv2.resize(img2, (int(w2 * scale), h1),
-                          interpolation=cv2.INTER_CUBIC)
+        img2 = cv2.resize(img2, (int(w2 * scale), h1), interpolation=cv2.INTER_CUBIC)
     return np.hstack((img1, img2))
 
 
-def _make_temp_jpg_path(prefix="stitch_", suffix=".jpg"):
-    # Generate a temp file path we keep on disk for downstream use
+def _make_temp_jpg_path(prefix="stitch_", suffix=".jpg") -> Path:
     tmp_dir = Path(tempfile.gettempdir())
     return tmp_dir / f"{prefix}{uuid.uuid4().hex}{suffix}"
 
@@ -105,29 +116,19 @@ def stitchedImagePath(
     frame_width: int = FRAME_WIDTH,
     frame_height: int = FRAME_HEIGHT,
     guide_box_frac=GUIDE_BOX_FRAC,
-    yolo_bottle_class: int = BOTTLE_CLASS_ID,
-    yolo_conf: float = YOLO_CONF,
-    outfile: Path | None = None,
-) -> str | None:
+    yolo_weights: Union[str, Path] = YOLO_WEIGHTS_FOR_DETECTION,
+    outfile: Optional[Union[str, Path]] = None,
+    mirror_horizontally: bool = True,  # <-- always mirror, per your request
+) -> Optional[str]:
     """
-    Launches the capture UI. User presses SPACE to capture FRONT, then BACK.
-    The two crops are stitched (front | back), written to disk as JPG, and the
-    path to that file is returned. Returns None if canceled.
+    Opens camera UI, capture FRONT then BACK (press SPACE twice),
+    stitches them, saves to a JPG, and RETURNS the file path. Auto-exits.
 
-    Parameters:
-        cam_index: OpenCV camera index.
-        frame_width / frame_height: capture resolution hints.
-        guide_box_frac: overlay box guidance (width_frac, height_frac).
-        yolo_bottle_class: YOLO class id to filter (COCO bottle=39).
-        yolo_conf: YOLO confidence threshold.
-        outfile: Optional explicit save path; if None, a temp path is created.
-
-    Usage:
-        path = stitchedImagePath()
-        if path:
-            final_run_ocr(path, "weights.pt")
+    Returns:
+        str path to saved JPG, or None on cancel/failure.
     """
-    model = YOLO("yolov8n.pt")
+    model = YOLO(str(yolo_weights))
+
     cap = cv2.VideoCapture(cam_index)
     cap.set(cv2.CAP_PROP_FRAME_WIDTH, frame_width)
     cap.set(cv2.CAP_PROP_FRAME_HEIGHT, frame_height)
@@ -146,39 +147,42 @@ def stitchedImagePath(
             if not ok:
                 break
 
-            display = frame.copy()
-            draw_guide_box(display, guide_box_frac)
+            # Always mirror horizontally (selfie view) for display AND processing
+            if mirror_horizontally:
+                frame = cv2.flip(frame, 1)
 
-            # ----- YOLO detect bottle ------
+            display = frame.copy()
+            guide = draw_guide_box(display, guide_box_frac)
+
+            # YOLO detect bottle
             yolo_out = model.predict(
-                source=frame,
-                classes=[yolo_bottle_class],
-                conf=yolo_conf,
-                verbose=False
+                source=frame, classes=[BOTTLE_CLASS_ID], conf=YOLO_CONF, verbose=False
             )
             box = choose_bottle_box(yolo_out)
 
-            # ------ Draw detection box ------
+            # Draw detection box
             if box is not None:
                 x1, y1, x2, y2, conf = box
                 cv2.rectangle(display, (x1, y1), (x2, y2), (0, 180, 255), 2)
-                cv2.putText(display, f"bottle {conf:.2f}",
-                            (x1, max(0, y1 - 8)),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.5,
-                            (0, 180, 255), 1, cv2.LINE_AA)
+                cv2.putText(
+                    display, f"bottle {conf:.2f}",
+                    (x1, max(0, y1 - 8)),
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 180, 255), 1, cv2.LINE_AA
+                )
 
+            # HUD
             cv2.putText(display, info, (20, 35), cv2.FONT_HERSHEY_SIMPLEX,
                         0.8, (255, 255, 255), 2, cv2.LINE_AA)
-            cv2.putText(display, "SPACE: capture | R: reset | Q: quit", (20, 65),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 220, 255), 1, cv2.LINE_AA)
+            cv2.putText(display, "SPACE: capture | R: reset | Q: quit",
+                        (20, 65), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.6, (200, 220, 255), 1, cv2.LINE_AA)
 
             cv2.imshow("Bottle Capture (Front + Back, then Stitch)", display)
             key = cv2.waitKey(1) & 0xFF
 
             if key == ord('q'):
-                # User canceled
-                save_path = None
-                break
+                # cancel
+                return None
 
             elif key == ord('r'):
                 front_img = None
@@ -186,12 +190,13 @@ def stitchedImagePath(
                 info = "Reset. Press SPACE to capture FRONT label."
 
             elif key == ord(' '):
-                # ------ only capture if bottle is present -----
+                # capture
                 if box is None:
-                    info = "No bottle detected. Center it inside the green box."
-                    continue
+                    # fallback to guide box area if bottle not detected
+                    x1, y1, x2, y2 = guide
+                else:
+                    x1, y1, x2, y2, _ = box
 
-                x1, y1, x2, y2, _ = box
                 crop = safe_crop(frame, x1, y1, x2, y2)
                 if crop is None:
                     info = "Bad crop. Adjust bottle and try again."
@@ -202,28 +207,34 @@ def stitchedImagePath(
                     info = "Front captured. Now rotate to BACK and press SPACE."
                 elif back_img is None:
                     back_img = crop
-                    # ----- Stitch & save to disk ------
+
+                    # Stitch & SAVE -> auto-exit immediately after
                     stitched = stitch_horizontal(front_img, back_img)
                     ok = cv2.imwrite(str(save_path), stitched)
                     if not ok:
                         print("Failed to write stitched image to:", save_path)
-                        save_path = None
-                    else:
-                        # Show a quick preview
-                        cv2.imshow("Stitched (Front | Back)", stitched)
-                        info = f"Saved: {save_path}\nPress Q to exit."
-                    # We’re done; wait for user to press Q or close window.
-                    # If you'd rather auto-exit immediately, uncomment below:
-                    # break
-        # end while
+                        return None
+
+                    # optional quick peek (250ms), then return
+                    cv2.imshow("Stitched (Front | Back)", stitched)
+                    cv2.waitKey(250)
+                    cv2.destroyWindow("Stitched (Front | Back)")
+                    for _ in range(3):
+                        cv2.waitKey(1)
+
+                    return str(save_path)
+
+                else:
+                    info = "Already stitched. Press R to restart or Q to quit."
+
     finally:
         cap.release()
         cv2.destroyAllWindows()
 
-    return str(save_path) if save_path else None
+    return None
 
 
-# Optional: keep a small CLI for manual testing
+# Simple CLI test
 if __name__ == "__main__":
     path = stitchedImagePath()
     if path:
