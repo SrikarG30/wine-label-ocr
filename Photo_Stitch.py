@@ -1,30 +1,25 @@
+# Photo_Stitch.py
+
 import cv2
 import numpy as np
 import time
-import subprocess
 import sys
 import tempfile
 import uuid
-import json
 from pathlib import Path
 
 try:
     from ultralytics import YOLO
 except Exception as e:
     raise SystemExit(
-        f"Install ultralytics first: pip install ultralytics\n\n{e}")
+        f"Install ultralytics first: pip install ultralytics\n\n{e}"
+    )
 
-# ---------- paths for auto-run of your scanner ----------
-ROOT = Path(__file__).resolve().parent
-SCAN_SCRIPT = ROOT / "ocr_scripts" / "scan_and_store.py"
-WEIGHTS = ROOT / "weights.pt"
-DB_PATH = ROOT / "storing_images" / "cellar.json"
-DB_PATH.parent.mkdir(parents=True, exist_ok=True)  # ensure folder exists
-
+# ---------- config ----------
 CAM_INDEX = 0
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
-BOTTLE_CLASS_ID = 39          # coco "bottle"
+BOTTLE_CLASS_ID = 39          # COCO "bottle"
 YOLO_CONF = 0.40
 GUIDE_BOX_FRAC = (0.40, 0.80)  # (width_frac, height_frac)
 
@@ -98,43 +93,44 @@ def stitch_horizontal(img1, img2):
                           interpolation=cv2.INTER_CUBIC)
     return np.hstack((img1, img2))
 
-# ---------- helper: run your existing CLI on a stitched numpy image ----------
+
+def _make_temp_jpg_path(prefix="stitch_", suffix=".jpg"):
+    # Generate a temp file path we keep on disk for downstream use
+    tmp_dir = Path(tempfile.gettempdir())
+    return tmp_dir / f"{prefix}{uuid.uuid4().hex}{suffix}"
 
 
-def run_scan_on_np(img_bgr):
+def stitchedImagePath(
+    cam_index: int = CAM_INDEX,
+    frame_width: int = FRAME_WIDTH,
+    frame_height: int = FRAME_HEIGHT,
+    guide_box_frac=GUIDE_BOX_FRAC,
+    yolo_bottle_class: int = BOTTLE_CLASS_ID,
+    yolo_conf: float = YOLO_CONF,
+    outfile: Path | None = None,
+) -> str | None:
     """
-    Saves stitched BGR image to a temp file, runs your CLI scanner,
-    returns parsed JSON dict. Temp file is removed automatically.
+    Launches the capture UI. User presses SPACE to capture FRONT, then BACK.
+    The two crops are stitched (front | back), written to disk as JPG, and the
+    path to that file is returned. Returns None if canceled.
+
+    Parameters:
+        cam_index: OpenCV camera index.
+        frame_width / frame_height: capture resolution hints.
+        guide_box_frac: overlay box guidance (width_frac, height_frac).
+        yolo_bottle_class: YOLO class id to filter (COCO bottle=39).
+        yolo_conf: YOLO confidence threshold.
+        outfile: Optional explicit save path; if None, a temp path is created.
+
+    Usage:
+        path = stitchedImagePath()
+        if path:
+            final_run_ocr(path, "weights.pt")
     """
-    tmp = Path(tempfile.gettempdir()) / f"stitch_{uuid.uuid4().hex}.jpg"
-    try:
-        ok = cv2.imwrite(str(tmp), img_bgr)
-        if not ok:
-            print("Failed to write temp stitched image.")
-            return {}
-        # Use same interpreter (venv-safe) and absolute paths
-        cmd = [sys.executable, str(SCAN_SCRIPT), str(
-            tmp), str(WEIGHTS), str(DB_PATH)]
-        res = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        return json.loads(res.stdout)
-    except subprocess.CalledProcessError as e:
-        print("scan_and_store failed:", e.stderr or e.stdout)
-        return {}
-    except Exception as e:
-        print("scan_and_store error:", e)
-        return {}
-    finally:
-        try:
-            tmp.unlink(missing_ok=True)
-        except Exception:
-            pass
-
-
-def main():
     model = YOLO("yolov8n.pt")
-    cap = cv2.VideoCapture(CAM_INDEX)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, FRAME_WIDTH)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, FRAME_HEIGHT)
+    cap = cv2.VideoCapture(cam_index)
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, frame_width)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, frame_height)
     if not cap.isOpened():
         raise SystemExit("Camera not available. Change CAM_INDEX.")
 
@@ -142,83 +138,95 @@ def main():
     back_img = None
     info = "Press SPACE to capture FRONT label"
 
-    while True:
-        ok, frame = cap.read()
-        if not ok:
-            break
+    save_path = Path(outfile) if outfile else _make_temp_jpg_path()
 
-        display = frame.copy()
-        guide = draw_guide_box(display, GUIDE_BOX_FRAC)
+    try:
+        while True:
+            ok, frame = cap.read()
+            if not ok:
+                break
 
-        # ----- YOLO detect bottle ------
-        yolo_out = model.predict(source=frame, classes=[
-                                 BOTTLE_CLASS_ID], conf=YOLO_CONF, verbose=False)
-        box = choose_bottle_box(yolo_out)
+            display = frame.copy()
+            draw_guide_box(display, guide_box_frac)
 
-        # ------ Draw detection box ------
-        if box is not None:
-            x1, y1, x2, y2, conf = box
-            cv2.rectangle(display, (x1, y1), (x2, y2), (0, 180, 255), 2)
-            cv2.putText(display, f"bottle {conf:.2f}", (x1, max(0, y1 - 8)),
-                        cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 180, 255), 1, cv2.LINE_AA)
+            # ----- YOLO detect bottle ------
+            yolo_out = model.predict(
+                source=frame,
+                classes=[yolo_bottle_class],
+                conf=yolo_conf,
+                verbose=False
+            )
+            box = choose_bottle_box(yolo_out)
 
-        cv2.putText(display, info, (20, 35), cv2.FONT_HERSHEY_SIMPLEX,
-                    0.8, (255, 255, 255), 2, cv2.LINE_AA)
-        cv2.putText(display, "SPACE: capture | R: reset | Q: quit", (20, 65),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 220, 255), 1, cv2.LINE_AA)
+            # ------ Draw detection box ------
+            if box is not None:
+                x1, y1, x2, y2, conf = box
+                cv2.rectangle(display, (x1, y1), (x2, y2), (0, 180, 255), 2)
+                cv2.putText(display, f"bottle {conf:.2f}",
+                            (x1, max(0, y1 - 8)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5,
+                            (0, 180, 255), 1, cv2.LINE_AA)
 
-        cv2.imshow("Bottle Capture (Front + Back, then Stitch)", display)
-        key = cv2.waitKey(1) & 0xFF
+            cv2.putText(display, info, (20, 35), cv2.FONT_HERSHEY_SIMPLEX,
+                        0.8, (255, 255, 255), 2, cv2.LINE_AA)
+            cv2.putText(display, "SPACE: capture | R: reset | Q: quit", (20, 65),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.6, (200, 220, 255), 1, cv2.LINE_AA)
 
-        if key == ord('q'):
-            break
+            cv2.imshow("Bottle Capture (Front + Back, then Stitch)", display)
+            key = cv2.waitKey(1) & 0xFF
 
-        elif key == ord('r'):
-            front_img = None
-            back_img = None
-            info = "Reset. Press SPACE to capture FRONT label."
+            if key == ord('q'):
+                # User canceled
+                save_path = None
+                break
 
-        elif key == ord(' '):
-            # ------ only capture if bottle is present -----
-            if box is None:
-                info = "No bottle detected. Center it inside the green box."
-                continue
+            elif key == ord('r'):
+                front_img = None
+                back_img = None
+                info = "Reset. Press SPACE to capture FRONT label."
 
-            x1, y1, x2, y2, _ = box
-            crop = safe_crop(frame, x1, y1, x2, y2)
-            if crop is None:
-                info = "Bad crop. Adjust bottle and try again."
-                continue
+            elif key == ord(' '):
+                # ------ only capture if bottle is present -----
+                if box is None:
+                    info = "No bottle detected. Center it inside the green box."
+                    continue
 
-            if front_img is None:
-                front_img = crop
-                info = "Front captured. Now rotate to BACK and press SPACE."
-            elif back_img is None:
-                back_img = crop
-                # ----- Stitch in memory & show ------
-                stitched = stitch_horizontal(
-                    front_img, back_img)  # <------ PHOTO
+                x1, y1, x2, y2, _ = box
+                crop = safe_crop(frame, x1, y1, x2, y2)
+                if crop is None:
+                    info = "Bad crop. Adjust bottle and try again."
+                    continue
 
-                # >>> Auto-run your existing OCR+store CLI <<<
-                result = run_scan_on_np(stitched)
-                # Optional overlay
-                maker = (result.get("maker_name") or "?")
-                year = (result.get("vintage") or "?")
-                seen = result.get("seen")
-                tag = "SEEN" if seen else ("NEW" if seen is not None else "?")
-                color = (0, 255, 0) if seen else (0, 200, 255)
-                cv2.putText(stitched, f"{maker}  {year}  {tag}",
-                            (20, 40), cv2.FONT_HERSHEY_SIMPLEX, 1.0, color, 2)
-                print(json.dumps(result or {}, indent=2))
+                if front_img is None:
+                    front_img = crop
+                    info = "Front captured. Now rotate to BACK and press SPACE."
+                elif back_img is None:
+                    back_img = crop
+                    # ----- Stitch & save to disk ------
+                    stitched = stitch_horizontal(front_img, back_img)
+                    ok = cv2.imwrite(str(save_path), stitched)
+                    if not ok:
+                        print("Failed to write stitched image to:", save_path)
+                        save_path = None
+                    else:
+                        # Show a quick preview
+                        cv2.imshow("Stitched (Front | Back)", stitched)
+                        info = f"Saved: {save_path}\nPress Q to exit."
+                    # We’re done; wait for user to press Q or close window.
+                    # If you'd rather auto-exit immediately, uncomment below:
+                    # break
+        # end while
+    finally:
+        cap.release()
+        cv2.destroyAllWindows()
 
-                cv2.imshow("Stitched (Front | Back)", stitched)
-                info = "Stitched shown. Press R to redo or Q to quit."
-            else:
-                info = "Already stitched. Press R to restart or Q to quit."
-
-    cap.release()
-    cv2.destroyAllWindows()
+    return str(save_path) if save_path else None
 
 
+# Optional: keep a small CLI for manual testing
 if __name__ == "__main__":
-    main()
+    path = stitchedImagePath()
+    if path:
+        print("Stitched image saved at:", path)
+    else:
+        print("No stitched image was produced.")

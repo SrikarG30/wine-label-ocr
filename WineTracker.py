@@ -6,10 +6,13 @@ from data_extraction_functions.final_run_ocr import final_run_ocr
 from similarity_functions.QRCodeSimilarity import isBarcodeSimilar
 from similarity_functions.VintageSimilarity import isVintageSimilar
 
+# pre-processing functions
+from Photo_Stitch import stitchedImagePath
+
 
 # imports
 import json
-
+import numpy as np
 
 
 # Initialize record with empty data
@@ -34,14 +37,27 @@ record['Barcode'] = 'temp'
 
 
 
-# --------- RUN QR CODE SCANNER ---------
-img = "test_images/009.jpg" # right now using a static image for testing purposes
+
+# img = "test_images/009.jpg" # right now using a static image for testing purposes
 # img = get_wine_label() -> Function will return stitched image of wine label
 
 # Armando will integrate image stitching
 #   -> Live Camera will open
 #   -> Stitched image of wine label is returned
 #   -> Image used for both OCR and Blob
+
+
+# --------- TESTING THE IMAGE STITCH -----------
+path = stitchedImagePath()
+if path:
+    custom_id, maker, vintage = final_run_ocr(path, "weights.pt")
+
+if custom_id is not None:
+    record["CustomID"] = custom_id
+if maker:
+    record["MakerName"] = maker
+if vintage is not None:
+    record["Vintage"] = vintage
 
 
 
