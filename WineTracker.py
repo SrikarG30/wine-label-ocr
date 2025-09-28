@@ -1,7 +1,7 @@
 # data extraction functions
 from data_extraction_functions.QRCodeScanner import scanBarcode
 from data_extraction_functions.final_run_ocr import final_run_ocr
-# from data_extraction_functions.hybrid import final_run_blobs -> Comment Once Added to Repo
+from data_extraction_functions.hybrid import final_run_blobs
 
 # similarity functions
 from similarity_functions.QRCodeSimilarity import isBarcodeSimilar
@@ -30,17 +30,24 @@ record = {
 barcode = scanBarcode(0)
 
 # -------- Get File Path for OCR and Blob -------- #
-normalFramePath, edgeFramePath = stitchedImagePath()
+normal_path, edge_path = stitchedImagePath()
 
 
 # ------------------- RUN OCR ------------------- #
-if normalFramePath:
-    custom_id, maker, vintage = final_run_ocr(normalFramePath, "weights.pt")
+if normal_path:
+    custom_id, maker, vintage = final_run_ocr(normal_path, "weights.pt")
 
 # ------------------- RUN BLOB ------------------ #
-# ---- Uncomment Once Blob Function Imported ---- #
-# if edgeFramePath:
-#     blobData = final_run_blobs(edgeFramePath)
+if edge_path:
+    blobData = final_run_blobs(
+        image_path=edge_path,
+        use_image_as_mask=True,     # if your prefilter produced “mostly masked” image
+        crop_label=False,           # keep full frame unless you want detector crop
+        skip_alignment=True,        # turntable = already straight
+        database="wine_database.jsonl",
+        crop_weights="crop_weights.pt",
+        debug_out="debug"           # or None
+    )
 
 # ------------ Assign Record Entries ------------ #
 if barcode:
@@ -51,10 +58,8 @@ if maker:
     record["MakerName"] = maker
 if vintage is not None:
     record["Vintage"] = vintage
-# --- Uncomment Once Blob Function Imported ---- #
-# if blobData is not None:
-#     record['BlobData'] = blobData
-
+if blobData is not None:
+    record['BlobData'] = blobData
 
 
 # Test Record Output
