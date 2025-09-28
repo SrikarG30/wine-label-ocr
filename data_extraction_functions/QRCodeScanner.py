@@ -1,61 +1,85 @@
+# QRCodeScanner.py
+# Capture a frame from OAK (DepthAI) and scan for barcodes using pyzbar.
+
 import cv2
-import numpy as np
-from pyzbar.pyzbar import decode
+from pyzbar import pyzbar
+import depthai as dai
 
-def ask_yes_no(prompt: str) -> bool:
+# ---------- Config ----------
+FRAME_WIDTH = 640
+FRAME_HEIGHT = 480
+DAI_DEVICE_MXID = None  # put your MXID here if you want to lock to a specific device
+
+
+def _open_depthai(frame_width: int, frame_height: int, device_mxid: str = None):
     """
-    Repeatedly prompt the user until they enter yes/y or no/n.
-    Returns True for yes, False for no.
+    Open DepthAI pipeline for color camera frames.
+    Returns (device, q_rgb).
     """
-    valid_yes = {"y", "yes"}
-    valid_no  = {"n", "no"}
-    while True:
-        try:
-            ans = input(prompt).strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            print("\nCanceled.")
-            return False
-        if ans in valid_yes:
-            return True
-        if ans in valid_no:
-            return False
-        print("Please enter yes/y or no/n.")
+    pipeline = dai.Pipeline()
 
-def scanBarcode(cam_index=0):
-    has_barcode = ask_yes_no("Does the wine bottle have a barcode? (y/n): ")
-    if not has_barcode:
-        return None
+    cam = pipeline.create(dai.node.ColorCamera)
+    cam.setResolution(dai.ColorCameraProperties.SensorResolution.THE_1080_P)
+    cam.setInterleaved(False)
+    cam.setColorOrder(dai.ColorCameraProperties.ColorOrder.BGR)
+    cam.setFps(30)
 
-    cap = cv2.VideoCapture(cam_index, cv2.CAP_AVFOUNDATION)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+    xout = pipeline.create(dai.node.XLinkOut)
+    xout.setStreamName("video")
+    cam.video.link(xout.input)
 
-    if not cap.isOpened():
-        raise RuntimeError(f"Could not open camera (index {cam_index}).")
+    if device_mxid is None:
+        device = dai.Device(pipeline)
+    else:
+        device = dai.Device(pipeline, dai.DeviceInfo(device_mxid))
 
-    cv2.namedWindow('Result', cv2.WINDOW_NORMAL)
+    q_rgb = device.getOutputQueue(name="video", maxSize=4, blocking=False)
+    return device, q_rgb
+
+
+def scanBarcode(timeout: int = 0) -> str:
+    """
+    Open OAK camera stream, look for a barcode, return the first decoded string.
+    Press Q to quit if needed.
+    timeout: milliseconds to wait (0 = wait forever).
+    """
+    device, q_rgb = _open_depthai(FRAME_WIDTH, FRAME_HEIGHT, DAI_DEVICE_MXID)
+
+    print("[DepthAI] Starting QR/barcode scanner...")
+    barcode_data = None
 
     try:
-        # Warm up a few frames
-        for _ in range(5):
-            cap.read()
-
         while True:
-            success, img = cap.read()
-            if not success or img is None:
+            frame = q_rgb.get().getCvFrame()
+            if frame is None:
                 continue
 
-            gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-            gray = np.ascontiguousarray(gray)
+            # Optional: mirror to behave like webcam selfie
+            frame = cv2.flip(frame, 1)
 
-            codes = decode(gray)
-            if codes:
-                print("Scanned")
-                myData = codes[0].data.decode('utf-8', errors='replace')
-                return myData
+            # detect barcodes
+            barcodes = pyzbar.decode(frame)
+            for bc in barcodes:
+                x, y, w, h = bc.rect
+                cv2.rectangle(frame, (x, y), (x + w, y + h), (0, 255, 0), 2)
+                text = bc.data.decode("utf-8")
+                barcode_data = text
+                cv2.putText(frame, text, (x, y - 10),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
+                print(f"[DepthAI] Detected barcode: {text}")
+                # return immediately after first detection
+                cv2.imshow("Barcode Scanner [OAK DepthAI]", frame)
+                cv2.waitKey(500)  # small pause so user sees it
+                return barcode_data
 
-            cv2.imshow('Result', img)
-            if cv2.waitKey(1) & 0xFF == ord('q'):
-                return None
+            # show live stream
+            cv2.imshow("Barcode Scanner [OAK DepthAI]", frame)
+            key = cv2.waitKey(1) & 0xFF
+            if key == ord("q"):
+                break
+
     finally:
-        cap.release()
+        device.close()
+        cv2.destroyAllWindows()
+
+    return barcode_data

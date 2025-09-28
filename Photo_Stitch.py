@@ -15,6 +15,13 @@ import tempfile
 import cv2
 import numpy as np
 
+# --- DepthAI (OAK) support ---
+try:
+    import depthai as dai
+    HAVE_DAI = True
+except Exception:
+    HAVE_DAI = False
+
 try:
     from ultralytics import YOLO
 except Exception as e:
@@ -23,13 +30,16 @@ except Exception as e:
     )
 
 # ---------- Config ----------
-CAM_INDEX = 0
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
 BOTTLE_CLASS_ID = 39           # COCO "bottle"
 YOLO_CONF = 0.40
 GUIDE_BOX_FRAC = (0.40, 0.80)  # (width_frac, height_frac)
 YOLO_WEIGHTS_FOR_DETECTION = "yolov8n.pt"  # change if you want
+
+# DepthAI toggles
+USE_DEPTHAI = True                 # must stay True, no cv2 fallback
+DAI_DEVICE_MXID: Optional[str] = "19443010E1EFF24800"
 
 
 def draw_guide_box(img, frac=(0.4, 0.8)) -> Tuple[int, int, int, int]:
@@ -102,7 +112,8 @@ def stitch_horizontal(img1, img2):
     h2, w2 = img2.shape[:2]
     if h1 != h2:
         scale = h1 / float(h2)
-        img2 = cv2.resize(img2, (int(w2 * scale), h1), interpolation=cv2.INTER_CUBIC)
+        img2 = cv2.resize(img2, (int(w2 * scale), h1),
+                          interpolation=cv2.INTER_CUBIC)
     return np.hstack((img1, img2))
 
 
@@ -111,29 +122,71 @@ def _make_temp_jpg_path(prefix="stitch_", suffix=".jpg") -> Path:
     return tmp_dir / f"{prefix}{uuid.uuid4().hex}{suffix}"
 
 
+# -------- DepthAI helpers --------
+def _open_depthai(frame_width: int, frame_height: int, device_mxid: Optional[str] = None):
+    if not HAVE_DAI:
+        raise SystemExit("DepthAI not installed. Run: pip install depthai")
+
+    pipeline = dai.Pipeline()
+
+    cam = pipeline.create(dai.node.ColorCamera)
+    # Instead of preview (low res), configure full sensor output
+    cam.setResolution(
+        dai.ColorCameraProperties.SensorResolution.THE_1080_P)  # or THE_4_K
+    cam.setColorOrder(dai.ColorCameraProperties.ColorOrder.BGR)
+    cam.setFps(30)
+
+    # Use video output instead of preview
+    xout = pipeline.create(dai.node.XLinkOut)
+    xout.setStreamName("video")
+    cam.video.link(xout.input)
+
+    if device_mxid is None:
+        device = dai.Device(pipeline)
+    else:
+        info = dai.DeviceInfo(device_mxid)
+        device = dai.Device(pipeline, info)
+
+    q_rgb = device.getOutputQueue(name="video", maxSize=4, blocking=False)
+    return device, q_rgb
+
+
 def stitchedImagePath(
-    cam_index: int = CAM_INDEX,
     frame_width: int = FRAME_WIDTH,
     frame_height: int = FRAME_HEIGHT,
     guide_box_frac=GUIDE_BOX_FRAC,
     yolo_weights: Union[str, Path] = YOLO_WEIGHTS_FOR_DETECTION,
     outfile: Optional[Union[str, Path]] = None,
-    mirror_horizontally: bool = True,  # <-- always mirror, per your request
+    mirror_horizontally: bool = False,
+    use_depthai: bool = USE_DEPTHAI,
+    dai_device_mxid: Optional[str] = DAI_DEVICE_MXID,
 ) -> Optional[str]:
     """
-    Opens camera UI, capture FRONT then BACK (press SPACE twice),
+    Opens OAK camera UI, capture FRONT then BACK (press SPACE twice),
     stitches them, saves to a JPG, and RETURNS the file path. Auto-exits.
-
-    Returns:
-        str path to saved JPG, or None on cancel/failure.
     """
+    if not HAVE_DAI:
+        raise SystemExit("DepthAI not installed. Run: pip install depthai")
+    if not use_depthai:
+        raise SystemExit("This build is DepthAI-only. Set use_depthai=True.")
+
     model = YOLO(str(yolo_weights))
 
-    cap = cv2.VideoCapture(cam_index)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, frame_width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, frame_height)
-    if not cap.isOpened():
-        raise SystemExit("Camera not available. Change CAM_INDEX.")
+    devs = dai.Device.getAllAvailableDevices()
+    if not devs:
+        raise SystemExit(
+            "No DepthAI device found. Plug in your OAK and try again.")
+    chosen_mxid = dai_device_mxid or devs[0].getMxId()
+    device, q_rgb = _open_depthai(frame_width, frame_height, chosen_mxid)
+    try:
+        print(
+            f"[DepthAI] Using {device.getDeviceName()} | MXID={chosen_mxid} | USB={device.getUsbSpeed()}")
+    except Exception:
+        print(f"[DepthAI] Using MXID={chosen_mxid}")
+
+    def _read_frame():
+        msg = q_rgb.get()
+        return True, msg.getCvFrame()
 
     front_img = None
     back_img = None
@@ -143,11 +196,10 @@ def stitchedImagePath(
 
     try:
         while True:
-            ok, frame = cap.read()
-            if not ok:
+            ok, frame = _read_frame()
+            if not ok or frame is None:
                 break
 
-            # Always mirror horizontally (selfie view) for display AND processing
             if mirror_horizontally:
                 frame = cv2.flip(frame, 1)
 
@@ -156,7 +208,8 @@ def stitchedImagePath(
 
             # YOLO detect bottle
             yolo_out = model.predict(
-                source=frame, classes=[BOTTLE_CLASS_ID], conf=YOLO_CONF, verbose=False
+                source=frame, classes=[
+                    BOTTLE_CLASS_ID], conf=YOLO_CONF, verbose=False
             )
             box = choose_bottle_box(yolo_out)
 
@@ -167,7 +220,8 @@ def stitchedImagePath(
                 cv2.putText(
                     display, f"bottle {conf:.2f}",
                     (x1, max(0, y1 - 8)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 180, 255), 1, cv2.LINE_AA
+                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,
+                                                    180, 255), 1, cv2.LINE_AA
                 )
 
             # HUD
@@ -177,11 +231,11 @@ def stitchedImagePath(
                         (20, 65), cv2.FONT_HERSHEY_SIMPLEX,
                         0.6, (200, 220, 255), 1, cv2.LINE_AA)
 
-            cv2.imshow("Bottle Capture (Front + Back, then Stitch)", display)
+            cv2.imshow(
+                "Bottle Capture [OAK DepthAI] (Front + Back, then Stitch)", display)
             key = cv2.waitKey(1) & 0xFF
 
             if key == ord('q'):
-                # cancel
                 return None
 
             elif key == ord('r'):
@@ -190,9 +244,7 @@ def stitchedImagePath(
                 info = "Reset. Press SPACE to capture FRONT label."
 
             elif key == ord(' '):
-                # capture
                 if box is None:
-                    # fallback to guide box area if bottle not detected
                     x1, y1, x2, y2 = guide
                 else:
                     x1, y1, x2, y2, _ = box
@@ -208,14 +260,12 @@ def stitchedImagePath(
                 elif back_img is None:
                     back_img = crop
 
-                    # Stitch & SAVE -> auto-exit immediately after
                     stitched = stitch_horizontal(front_img, back_img)
                     ok = cv2.imwrite(str(save_path), stitched)
                     if not ok:
                         print("Failed to write stitched image to:", save_path)
                         return None
 
-                    # optional quick peek (250ms), then return
                     cv2.imshow("Stitched (Front | Back)", stitched)
                     cv2.waitKey(250)
                     cv2.destroyWindow("Stitched (Front | Back)")
@@ -228,8 +278,10 @@ def stitchedImagePath(
                     info = "Already stitched. Press R to restart or Q to quit."
 
     finally:
-        cap.release()
-        cv2.destroyAllWindows()
+        try:
+            device.close()
+        finally:
+            cv2.destroyAllWindows()
 
     return None
 
