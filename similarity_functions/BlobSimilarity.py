@@ -146,24 +146,26 @@ def isBlobDataSimilar(record1, record2, *,
 
 
 
-# Paste blob data dict for testing
-blobdata1 = {}
-blobdata2 = {}
+# UNCOMMENT FOR TESTING:
+
+# # Paste blob data dict for testing
+# blobdata1 = {}
+# blobdata2 = {}
 
 
-# ----- For Testing Blob Similarity ----- #
-record1 = {"BlobData": blobdata1}
-record2 = {"BlobData": blobdata2}
+# # ----- For Testing Blob Similarity ----- #
+# record1 = {"BlobData": blobdata1}
+# record2 = {"BlobData": blobdata2}
 
-#   Run test (tune thresholds as needed)  #
-similar, info = isBlobDataSimilar(
-    record1, record2,
-    threshold=0.55,        # final decision cutoff on the 0..1 score
-    pair_threshold=0.22,   # per-pair gating cost (lower = stricter)
-    return_details=True
-)
+# #   Run test (tune thresholds as needed)  #
+# similar, info = isBlobDataSimilar(
+#     record1, record2,
+#     threshold=0.55,        # final decision cutoff on the 0..1 score
+#     pair_threshold=0.22,   # per-pair gating cost (lower = stricter)
+#     return_details=True
+# )
 
-print("similar?", similar)
-print(info)
+# print("similar?", similar)
+# print(info)
 
 
