@@ -1,7 +1,8 @@
 # data extraction functions
 from data_extraction_functions.QRCodeScanner import scanBarcode
 from data_extraction_functions.final_run_ocr import final_run_ocr
-# from data_extraction_functions.real_final_run_ocr import final_run_ocr
+# from data_extraction_functions.hybrid import final_run_blobs -> Comment Once Added to Repo
+
 # similarity functions
 from similarity_functions.QRCodeSimilarity import isBarcodeSimilar
 from similarity_functions.VintageSimilarity import isVintageSimilar
@@ -25,58 +26,36 @@ record = {
 }
 
 
-# --------- RUN QR CODE SCANNER ---------
-# comment out these three lines if pyzbar not working to test other code
+# -------------------- RUN QR -------------------- #
 barcode = scanBarcode(0)
+
+# -------- Get File Path for OCR and Blob -------- #
+normalFramePath, edgeFramePath = stitchedImagePath()
+
+
+# ------------------- RUN OCR ------------------- #
+if normalFramePath:
+    custom_id, maker, vintage = final_run_ocr(normalFramePath, "weights.pt")
+
+# ------------------- RUN BLOB ------------------ #
+# ---- Uncomment Once Blob Function Imported ---- #
+# if edgeFramePath:
+#     blobData = final_run_blobs(edgeFramePath)
+
+# ------------ Assign Record Entries ------------ #
 if barcode:
     record['Barcode'] = str(barcode)
-
-# uncomment line below if pyzbar not working to test other code
-# record['Barcode'] = 'temp'
-
-
-# img = "test_images/009.jpg" # right now using a static image for testing purposes
-# img = get_wine_label() -> Function will return stitched image of wine label
-
-# Armando will integrate image stitching
-#   -> Live Camera will open
-#   -> Stitched image of wine label is returned
-#   -> Image used for both OCR and Blob
-
-
-# --------- TESTING THE IMAGE STITCH -----------
-path = stitchedImagePath()
-if path:
-    custom_id, maker, vintage = final_run_ocr(path, "weights.pt")
-
-# print(custom_id)
-# print(maker)
-# print(vintage)
-
 if custom_id is not None:
     record["CustomID"] = custom_id
 if maker:
     record["MakerName"] = maker
 if vintage is not None:
     record["Vintage"] = vintage
+# --- Uncomment Once Blob Function Imported ---- #
+# if blobData is not None:
+#     record['BlobData'] = blobData
 
 
-# # --------- RUN PADDLEOCR/ROBOFLOW ---------
-# custom_id, maker, vintage = final_run_ocr("test_images/009.jpg", "weights.pt")
 
-# # Set fields if present
-# if custom_id is not None:
-#     record["CustomID"] = custom_id
-# if maker:
-#     record["MakerName"] = maker
-# if vintage is not None:
-#     record["Vintage"] = vintage
-
-
-# Run Blob Method Here
-# extract_blob_data should return a json or a dictionary
-# record['BlobData'] = extract_blob_data('image path')
-
-
-# Output record for testing
+# Test Record Output
 print(record)
