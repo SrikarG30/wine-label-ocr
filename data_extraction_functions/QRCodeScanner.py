@@ -11,6 +11,26 @@ FRAME_HEIGHT = 480
 DAI_DEVICE_MXID = None  # put your MXID here if you want to lock to a specific device
 
 
+def ask_yes_no(prompt: str) -> bool:
+    """
+    Repeatedly prompt the user until they enter yes/y or no/n.
+    Returns True for yes, False for no.
+    """
+    valid_yes = {"y", "yes"}
+    valid_no = {"n", "no"}
+    while True:
+        try:
+            ans = input(prompt).strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\nCanceled.")
+            return False
+        if ans in valid_yes:
+            return True
+        if ans in valid_no:
+            return False
+        print("Please enter yes/y or no/n.")
+
+
 def _open_depthai(frame_width: int, frame_height: int, device_mxid: str = None):
     """
     Open DepthAI pipeline for color camera frames.
@@ -38,8 +58,8 @@ def _open_depthai(frame_width: int, frame_height: int, device_mxid: str = None):
 
 
 def scanBarcode(timeout: int = 0) -> str:
-    scan = input("Is there a barcode (y/n)")
-    if scan == 'n':
+    has_barcode = ask_yes_no("Does the wine bottle have a barcode? (y/n): ")
+    if not has_barcode:
         return None
     """
     Open OAK camera stream, look for a barcode, return the first decoded string.

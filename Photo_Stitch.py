@@ -137,6 +137,8 @@ def _open_depthai(frame_width: int, frame_height: int, device_mxid: Optional[str
     cam.setResolution(dai.ColorCameraProperties.SensorResolution.THE_1080_P)
     cam.setColorOrder(dai.ColorCameraProperties.ColorOrder.BGR)
     cam.setFps(30)
+    FRAME_WIDTH = 1920
+    FRAME_HEIGHT = 1080
     cam.setVideoSize(FRAME_WIDTH, FRAME_HEIGHT)
 
     xout = pipeline.create(dai.node.XLinkOut)
