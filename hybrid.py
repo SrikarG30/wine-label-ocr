@@ -1,13 +1,10 @@
 #!/usr/bin/env python3
 """
-Hybrid Wine Label Analysis System  (cropping + masking DISABLED)
-
-Changes in this version:
-- Cropping disabled: ROI is always the full image (ignores YOLO / heuristics).
-- Masking disabled: create_text_mask() returns an empty mask and notes 'disabled'.
+Hybrid Wine Label Analysis System  (masking DISABLED)
 
 Usage:
-  python hybrid_wine_system.py /path/to/image.jpg --database wine_db.jsonl --debug-out debug
+    python hybrid.py /path/to/image.jpg  --use-image-as-mask --skip-alignment --debug-out debug
+    python3 hybrid.py /path/to/image.jpg --use-image-as-mask --skip-alignment --debug-out debug
 """
 
 import argparse
