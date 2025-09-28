@@ -5,6 +5,7 @@ from data_extraction_functions.final_run_ocr import final_run_ocr
 # similarity functions
 from similarity_functions.QRCodeSimilarity import isBarcodeSimilar
 from similarity_functions.VintageSimilarity import isVintageSimilar
+from data_extraction_functions.hybrid import final_run_blobs
 
 # pre-processing functions
 from Photo_Stitch import stitchedImagePath
@@ -45,9 +46,20 @@ if barcode:
 
 
 # --------- TESTING THE IMAGE STITCH -----------
-path = stitchedImagePath()
-if path:
-    custom_id, maker, vintage = final_run_ocr(path, "weights.pt")
+normal_path, edge_path = stitchedImagePath()
+if normal_path and edge_path:
+    custom_id, maker, vintage = final_run_ocr(normal_path, "weights.pt")
+
+    blob_result = final_run_blobs(
+        image_path=edge_path,
+        use_image_as_mask=True,     # if your prefilter produced “mostly masked” image
+        crop_label=False,           # keep full frame unless you want detector crop
+        skip_alignment=True,        # turntable = already straight
+        database="wine_database.jsonl",
+        crop_weights="crop_weights.pt",
+        debug_out="debug"           # or None
+    )
+    record["BlobData"] = blob_result
 
 # print(custom_id)
 # print(maker)

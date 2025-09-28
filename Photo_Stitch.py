@@ -1,12 +1,19 @@
 # Photo_Stitch.py
-# Capture FRONT + BACK label crops using YOLO bottle detection,
-# stitch them side-by-side, save to a temp JPG, and return the file path.
+# Capture FRONT + BACK using OAK (color stream),
+# compute a label box on the COLOR frame, but DO NOT crop color.
+# Apply that box to the EDGE frame (Canny) and crop there.
+# Save two stitched JPGs:
+#   1) normal (color, full frames)  -> normalFramePath
+#   2) edge   (edge, cropped by box)-> edgeFramePath
 #
-# Usage from another module:
+# Usage:
 #   from Photo_Stitch import stitchedImagePath
-#   path = stitchedImagePath()
-#   if path:
-#       final_run_ocr(path, "weights.pt")
+#   normalPath, edgePath = stitchedImagePath()
+#   if normalPath and edgePath:
+#       # normalPath -> OCR/Barcode/cropping coords (if needed)
+#       # edgePath   -> blob detection
+#
+# Keys: SPACE (capture), R (reset), Q (quit)
 
 from pathlib import Path
 from typing import Union, Optional, Tuple
@@ -14,6 +21,7 @@ import uuid
 import tempfile
 import cv2
 import numpy as np
+import depthai as dai
 
 # --- DepthAI (OAK) support ---
 try:
@@ -32,9 +40,9 @@ except Exception as e:
 # ---------- Config ----------
 FRAME_WIDTH = 640
 FRAME_HEIGHT = 480
-BOTTLE_CLASS_ID = 39           # COCO "bottle"
+BOTTLE_CLASS_ID = 39            # COCO "bottle"
 YOLO_CONF = 0.40
-GUIDE_BOX_FRAC = (0.40, 0.80)  # (width_frac, height_frac)
+GUIDE_BOX_FRAC = (0.40, 0.80)   # (width_frac, height_frac)
 YOLO_WEIGHTS_FOR_DETECTION = "yolov8n.pt"  # change if you want
 
 # DepthAI toggles
@@ -68,28 +76,24 @@ def draw_guide_box(img, frac=(0.4, 0.8)) -> Tuple[int, int, int, int]:
     return (x1, y1, x2, y2)
 
 
-def choose_bottle_box(results):
-    """Pick the largest confident bottle bbox from YOLO results."""
+def choose_best_box(results, conf_thresh=0.40):
+    """Pick highest-confidence box from any class."""
     best = None
-    best_area = 0
+    best_conf = -1.0
     for r in results:
         if r.boxes is None:
             continue
         for b in r.boxes:
             try:
-                cls = int(b.cls.item())
-                if cls != BOTTLE_CLASS_ID:
-                    continue
                 conf = float(b.conf.item())
-                if conf < YOLO_CONF:
+                if conf < conf_thresh:
                     continue
                 x1, y1, x2, y2 = [int(v) for v in b.xyxy[0].tolist()]
-                area = max(0, x2 - x1) * max(0, y2 - y1)
-                if area > best_area:
-                    best_area = area
+                if conf > best_conf:
+                    best_conf = conf
                     best = (x1, y1, x2, y2, conf)
             except Exception:
-                continue
+                pass
     return best
 
 
@@ -111,8 +115,8 @@ def stitch_horizontal(img1, img2):
     h1, w1 = img1.shape[:2]
     h2, w2 = img2.shape[:2]
     if h1 != h2:
-        scale = h1 / float(h2)
-        img2 = cv2.resize(img2, (int(w2 * scale), h1),
+        scale = h1 / float(h2 if h2 else 1)
+        img2 = cv2.resize(img2, (max(1, int(w2 * scale)), h1),
                           interpolation=cv2.INTER_CUBIC)
     return np.hstack((img1, img2))
 
@@ -130,13 +134,11 @@ def _open_depthai(frame_width: int, frame_height: int, device_mxid: Optional[str
     pipeline = dai.Pipeline()
 
     cam = pipeline.create(dai.node.ColorCamera)
-    # Instead of preview (low res), configure full sensor output
-    cam.setResolution(
-        dai.ColorCameraProperties.SensorResolution.THE_1080_P)  # or THE_4_K
+    cam.setResolution(dai.ColorCameraProperties.SensorResolution.THE_1080_P)
     cam.setColorOrder(dai.ColorCameraProperties.ColorOrder.BGR)
     cam.setFps(30)
+    cam.setVideoSize(FRAME_WIDTH, FRAME_HEIGHT)
 
-    # Use video output instead of preview
     xout = pipeline.create(dai.node.XLinkOut)
     xout.setStreamName("video")
     cam.video.link(xout.input)
@@ -151,19 +153,41 @@ def _open_depthai(frame_width: int, frame_height: int, device_mxid: Optional[str
     return device, q_rgb
 
 
+def _edge_from_color_bgr(bgr: np.ndarray) -> np.ndarray:
+    """Host-side edge map (Canny + light morphology)."""
+    g = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    edges = cv2.Canny(g, 50, 150)
+    # optional: thicken slightly for connectivity
+    edges = cv2.morphologyEx(edges, cv2.MORPH_DILATE,
+                             cv2.getStructuringElement(cv2.MORPH_RECT, (2, 2)), 1)
+    return edges
+
+
 def stitchedImagePath(
     frame_width: int = FRAME_WIDTH,
     frame_height: int = FRAME_HEIGHT,
     guide_box_frac=GUIDE_BOX_FRAC,
     yolo_weights: Union[str, Path] = YOLO_WEIGHTS_FOR_DETECTION,
-    outfile: Optional[Union[str, Path]] = None,
+    outfile_normal: Optional[Union[str, Path]] = None,
+    outfile_edge: Optional[Union[str, Path]] = None,
     mirror_horizontally: bool = False,
     use_depthai: bool = USE_DEPTHAI,
     dai_device_mxid: Optional[str] = DAI_DEVICE_MXID,
-) -> Optional[str]:
+) -> Tuple[Optional[str], Optional[str]]:
     """
-    Opens OAK camera UI, capture FRONT then BACK (press SPACE twice),
-    stitches them, saves to a JPG, and RETURNS the file path. Auto-exits.
+    Opens OAK camera UI, capture FRONT then BACK (press SPACE twice).
+
+    - On each SPACE:
+        * Run YOLO on COLOR frame to get crop coords (fallback = guide box).
+        * DO NOT crop the color frame (store full color frame).
+        * Crop the EDGE frame with those coords (store cropped edge).
+
+    - After 2 captures:
+        * Save STITCHED COLOR (full frames)      -> normalFramePath
+        * Save STITCHED EDGE  (cropped by coords)-> edgeFramePath
+
+    Returns: (normalFramePath, edgeFramePath)
+             (None, None) if aborted.
     """
     if not HAVE_DAI:
         raise SystemExit("DepthAI not installed. Run: pip install depthai")
@@ -179,50 +203,54 @@ def stitchedImagePath(
     chosen_mxid = dai_device_mxid or devs[0].getMxId()
     device, q_rgb = _open_depthai(frame_width, frame_height, chosen_mxid)
     try:
-        print(
-            f"[DepthAI] Using {device.getDeviceName()} | MXID={chosen_mxid} | USB={device.getUsbSpeed()}")
-    except Exception:
         print(f"[DepthAI] Using MXID={chosen_mxid}")
+    except Exception:
+        pass
 
     def _read_frame():
         msg = q_rgb.get()
         return True, msg.getCvFrame()
 
-    front_img = None
-    back_img = None
-    info = "Press SPACE to capture FRONT label"
+    # storage for the two shots
+    color_front_full = None
+    color_back_full = None
+    edge_front_cropped = None
+    edge_back_cropped = None
 
-    save_path = Path(outfile) if outfile else _make_temp_jpg_path()
+    info = "Press SPACE to capture FRONT label"
+    normal_save = Path(outfile_normal) if outfile_normal else _make_temp_jpg_path(
+        prefix="normal_")
+    edge_save = Path(outfile_edge) if outfile_edge else _make_temp_jpg_path(
+        prefix="edge_")
 
     try:
         while True:
-            ok, frame = _read_frame()
-            if not ok or frame is None:
+            ok, frame_bgr = _read_frame()
+            if not ok or frame_bgr is None:
                 break
 
             if mirror_horizontally:
-                frame = cv2.flip(frame, 1)
+                frame_bgr = cv2.flip(frame_bgr, 1)
 
-            display = frame.copy()
+            # compute edge view (host-side)
+            edge = _edge_from_color_bgr(frame_bgr)
+
+            # For display HUD, draw guide on a copy of color
+            display = frame_bgr.copy()
             guide = draw_guide_box(display, guide_box_frac)
 
-            # YOLO detect bottle
+            # YOLO detect bottle ON COLOR
             yolo_out = model.predict(
-                source=frame, classes=[
-                    BOTTLE_CLASS_ID], conf=YOLO_CONF, verbose=False
-            )
-            box = choose_bottle_box(yolo_out)
+                source=frame_bgr, conf=YOLO_CONF, verbose=False)
+            box = choose_best_box(yolo_out, YOLO_CONF)
 
-            # Draw detection box
+            # visualize color det box
             if box is not None:
                 x1, y1, x2, y2, conf = box
                 cv2.rectangle(display, (x1, y1), (x2, y2), (0, 180, 255), 2)
-                cv2.putText(
-                    display, f"bottle {conf:.2f}",
-                    (x1, max(0, y1 - 8)),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,
-                                                    180, 255), 1, cv2.LINE_AA
-                )
+                cv2.putText(display, f"bottle {conf:.2f}",
+                            (x1, max(0, y1 - 8)),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 180, 255), 1, cv2.LINE_AA)
 
             # HUD
             cv2.putText(display, info, (20, 35), cv2.FONT_HERSHEY_SIMPLEX,
@@ -231,48 +259,73 @@ def stitchedImagePath(
                         (20, 65), cv2.FONT_HERSHEY_SIMPLEX,
                         0.6, (200, 220, 255), 1, cv2.LINE_AA)
 
+            # Show side-by-side preview (color | edge)
+            edge_vis = cv2.cvtColor(edge, cv2.COLOR_GRAY2BGR)
+            preview = stitch_horizontal(display, edge_vis)
             cv2.imshow(
-                "Bottle Capture [OAK DepthAI] (Front + Back, then Stitch)", display)
+                "Bottle Capture [Color | Edge] (Front + Back, then Stitch)", preview)
             key = cv2.waitKey(1) & 0xFF
 
             if key == ord('q'):
-                return None
+                return None, None
 
             elif key == ord('r'):
-                front_img = None
-                back_img = None
+                color_front_full = None
+                color_back_full = None
+                edge_front_cropped = None
+                edge_back_cropped = None
                 info = "Reset. Press SPACE to capture FRONT label."
 
             elif key == ord(' '):
+                # choose coords from COLOR (yolo or guide)
                 if box is None:
                     x1, y1, x2, y2 = guide
                 else:
                     x1, y1, x2, y2, _ = box
 
-                crop = safe_crop(frame, x1, y1, x2, y2)
-                if crop is None:
+                # crop the EDGE frame using coords from COLOR
+                edge_crop = safe_crop(edge, x1, y1, x2, y2)
+                if edge_crop is None:
                     info = "Bad crop. Adjust bottle and try again."
                     continue
 
-                if front_img is None:
-                    front_img = crop
+                # store full COLOR + cropped EDGE per shot
+                if color_front_full is None:
+                    color_front_full = frame_bgr.copy()          # FULL color
+                    edge_front_cropped = edge_crop.copy()        # CROPPED edge
                     info = "Front captured. Now rotate to BACK and press SPACE."
-                elif back_img is None:
-                    back_img = crop
+                elif color_back_full is None:
+                    color_back_full = frame_bgr.copy()           # FULL color
+                    edge_back_cropped = edge_crop.copy()         # CROPPED edge
 
-                    stitched = stitch_horizontal(front_img, back_img)
-                    ok = cv2.imwrite(str(save_path), stitched)
-                    if not ok:
-                        print("Failed to write stitched image to:", save_path)
-                        return None
+                    # stitch both products
+                    stitched_color = stitch_horizontal(
+                        color_front_full, color_back_full)
+                    stitched_edge = stitch_horizontal(
+                        edge_front_cropped, edge_back_cropped)
 
-                    cv2.imshow("Stitched (Front | Back)", stitched)
-                    cv2.waitKey(250)
-                    cv2.destroyWindow("Stitched (Front | Back)")
+                    ok1 = cv2.imwrite(str(normal_save), stitched_color)
+                    ok2 = cv2.imwrite(str(edge_save),   stitched_edge)
+                    if not ok1 or not ok2:
+                        print("Failed to write stitched outputs.")
+                        return None, None
+
+                    # quick preview windows
+                    cv2.imshow("Stitched COLOR (Front | Back)", stitched_color)
+                    cv2.imshow(
+                        "Stitched EDGE  (Front | Back, Cropped)", stitched_edge)
+                    cv2.waitKey(300)
+                    try:
+                        cv2.destroyWindow("Stitched COLOR (Front | Back)")
+                        cv2.destroyWindow(
+                            "Stitched EDGE  (Front | Back, Cropped)")
+                    except Exception:
+                        pass
                     for _ in range(3):
                         cv2.waitKey(1)
 
-                    return str(save_path)
+                    # return both paths
+                    return str(normal_save), str(edge_save)
 
                 else:
                     info = "Already stitched. Press R to restart or Q to quit."
@@ -283,13 +336,14 @@ def stitchedImagePath(
         finally:
             cv2.destroyAllWindows()
 
-    return None
+    return None, None
 
 
 # Simple CLI test
 if __name__ == "__main__":
-    path = stitchedImagePath()
-    if path:
-        print("Stitched image saved at:", path)
+    normalPath, edgePath = stitchedImagePath()
+    if normalPath and edgePath:
+        print("Color (full)  stitched image:", normalPath)
+        print("Edge  (cropped) stitched image:", edgePath)
     else:
-        print("No stitched image was produced.")
+        print("No stitched images were produced.")
