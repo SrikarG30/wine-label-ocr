@@ -6,6 +6,7 @@ from data_extraction_functions.hybrid import final_run_blobs
 # similarity functions
 from similarity_functions.QRCodeSimilarity import isBarcodeSimilar
 from similarity_functions.VintageSimilarity import isVintageSimilar
+from data_extraction_functions.hybrid import final_run_blobs
 
 # pre-processing functions
 from Photo_Stitch import stitchedImagePath

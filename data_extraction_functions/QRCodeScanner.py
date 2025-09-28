@@ -38,6 +38,9 @@ def _open_depthai(frame_width: int, frame_height: int, device_mxid: str = None):
 
 
 def scanBarcode(timeout: int = 0) -> str:
+    scan = input("Is there a barcode (y/n)")
+    if scan == 'n':
+        return None
     """
     Open OAK camera stream, look for a barcode, return the first decoded string.
     Press Q to quit if needed.
