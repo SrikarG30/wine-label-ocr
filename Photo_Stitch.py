@@ -23,6 +23,17 @@ import cv2
 import numpy as np
 import depthai as dai
 
+from pathlib import Path
+
+
+def _with_suffix(path_like: Union[str, Path], tag: str) -> Path:
+    """Insert _{tag} before file suffix. If no path given, make a temp one."""
+    if not path_like:
+        return _make_temp_jpg_path(prefix=f"{tag}_")
+    p = Path(path_like)
+    return p.with_name(f"{p.stem}_{tag}{p.suffix or '.jpg'}")
+
+
 # --- DepthAI (OAK) support ---
 try:
     import depthai as dai
@@ -175,6 +186,11 @@ def stitchedImagePath(
     mirror_horizontally: bool = False,
     use_depthai: bool = USE_DEPTHAI,
     dai_device_mxid: Optional[str] = DAI_DEVICE_MXID,
+
+    save_first_debug: bool = False,
+    first_debug_out: Optional[Union[str, Path]] = None,
+    save_first_debug_annotated: bool = False,
+    first_debug_annotated_out: Optional[Union[str, Path]] = None,
 ) -> Tuple[Optional[str], Optional[str]]:
     """
     Opens OAK camera UI, capture FRONT then BACK (press SPACE twice).
@@ -224,6 +240,12 @@ def stitchedImagePath(
         prefix="normal_")
     edge_save = Path(outfile_edge) if outfile_edge else _make_temp_jpg_path(
         prefix="edge_")
+
+    if save_first_debug and not first_debug_out:
+        first_debug_out = _make_temp_jpg_path(prefix="first_normal_full_")
+    if save_first_debug_annotated and not first_debug_annotated_out:
+        first_debug_annotated_out = _make_temp_jpg_path(
+            prefix="first_normal_annot_")
 
     try:
         while True:
@@ -293,14 +315,86 @@ def stitchedImagePath(
 
                 # store full COLOR + cropped EDGE per shot
                 if color_front_full is None:
-                    color_front_full = frame_bgr.copy()          # FULL color
-                    edge_front_cropped = edge_crop.copy()        # CROPPED edge
-                    info = "Front captured. Now rotate to BACK and press SPACE."
-                elif color_back_full is None:
-                    color_back_full = frame_bgr.copy()           # FULL color
-                    edge_back_cropped = edge_crop.copy()         # CROPPED edge
+                    # ---- FIRST CAPTURE (FRONT) ----
+                    color_front_full = frame_bgr.copy()     # FULL color (raw)
+                    edge_front_cropped = edge_crop.copy()   # CROPPED edge
 
-                    # stitch both products
+                    # Save + show normal full-color (FRONT)
+                    if save_first_debug:
+                        # If user provided a path, use it for FRONT and auto-make BACK later
+                        front_out = _with_suffix(first_debug_out or _make_temp_jpg_path(
+                            prefix="first_normal_full_"), "front")
+                        try:
+                            cv2.imwrite(str(front_out), color_front_full)
+                            print(
+                                f"[Debug] Saved FRONT normal/full frame to: {front_out}")
+                        except Exception as e:
+                            print(
+                                f"[Debug] Failed to save FRONT normal image: {e}")
+
+                    # Optional annotated preview (with boxes/HUD)
+                    if save_first_debug_annotated:
+                        front_annot_out = _with_suffix(first_debug_annotated_out or _make_temp_jpg_path(
+                            prefix="first_normal_annot_"), "front")
+                        try:
+                            cv2.imwrite(str(front_annot_out), display)
+                            print(
+                                f"[Debug] Saved FRONT annotated preview to: {front_annot_out}")
+                        except Exception as e:
+                            print(
+                                f"[Debug] Failed to save FRONT annotated image: {e}")
+
+                    # SHOW the captured normal image (FRONT)
+                    try:
+                        cv2.imshow("Captured NORMAL (Front)", color_front_full)
+                        # brief peek; non-blocking to your loop
+                        cv2.waitKey(200)
+                        cv2.destroyWindow("Captured NORMAL (Front)")
+                    except Exception:
+                        pass
+
+                    info = "Front captured. Now rotate to BACK and press SPACE."
+
+                elif color_back_full is None:
+                    # ---- SECOND CAPTURE (BACK) ----
+                    color_back_full = frame_bgr.copy()      # FULL color (raw)
+                    edge_back_cropped = edge_crop.copy()    # CROPPED edge
+
+                    # Save + show normal full-color (BACK)
+                    if save_first_debug:
+                        # Derive a matching BACK path from the user's FRONT path if provided,
+                        # else write to a fresh temp path.
+                        back_out = _with_suffix(first_debug_out or _make_temp_jpg_path(
+                            prefix="first_normal_full_"), "back")
+                        try:
+                            cv2.imwrite(str(back_out), color_back_full)
+                            print(
+                                f"[Debug] Saved BACK normal/full frame to: {back_out}")
+                        except Exception as e:
+                            print(
+                                f"[Debug] Failed to save BACK normal image: {e}")
+
+                    # Optional annotated preview (BACK)
+                    if save_first_debug_annotated:
+                        back_annot_out = _with_suffix(first_debug_annotated_out or _make_temp_jpg_path(
+                            prefix="first_normal_annot_"), "back")
+                        try:
+                            cv2.imwrite(str(back_annot_out), display)
+                            print(
+                                f"[Debug] Saved BACK annotated preview to: {back_annot_out}")
+                        except Exception as e:
+                            print(
+                                f"[Debug] Failed to save BACK annotated image: {e}")
+
+                    # SHOW the captured normal image (BACK)
+                    try:
+                        cv2.imshow("Captured NORMAL (Back)", color_back_full)
+                        cv2.waitKey(200)
+                        cv2.destroyWindow("Captured NORMAL (Back)")
+                    except Exception:
+                        pass
+
+                    # ---- proceed to stitch and save as before ----
                     stitched_color = stitch_horizontal(
                         color_front_full, color_back_full)
                     stitched_edge = stitch_horizontal(
@@ -312,7 +406,7 @@ def stitchedImagePath(
                         print("Failed to write stitched outputs.")
                         return None, None
 
-                    # quick preview windows
+                    # quick preview windows (unchanged)
                     cv2.imshow("Stitched COLOR (Front | Back)", stitched_color)
                     cv2.imshow(
                         "Stitched EDGE  (Front | Back, Cropped)", stitched_edge)
@@ -326,11 +420,10 @@ def stitchedImagePath(
                     for _ in range(3):
                         cv2.waitKey(1)
 
-                    # return both paths
                     return str(normal_save), str(edge_save)
 
                 else:
-                    info = "Already stitched. Press R to restart or Q to quit."
+                    info = "Already stitched. Press R to restart or Q: quit."
 
     finally:
         try:

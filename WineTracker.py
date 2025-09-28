@@ -32,12 +32,14 @@ def run():
     barcode = scanBarcode(0)
 
     # -------- Get File Path for OCR and Blob -------- #
-    normal_path, edge_path = stitchedImagePath()
+    normal_path, edge_path = stitchedImagePath(save_first_debug=True,
+                                               first_debug_out="debug/first.jpg",               # base filename
+                                               save_first_debug_annotated=True,
+                                               first_debug_annotated_out="debug/first_annot.jpg")
 
     # ------------------- RUN OCR ------------------- #
     if normal_path:
         custom_id, maker, vintage = final_run_ocr(normal_path, "weights.pt")
-        # debug_out = "debug"
 
     # ------------------- RUN BLOB ------------------ #
     if edge_path:
