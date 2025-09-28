@@ -1,0 +1,1 @@
+python3 hybrid.py wine_image_path --use-image-as-mask --debug-out debug
